@@ -3,3 +3,5 @@ out/
 broadcast/
 .env
 lib/
+
+.DS_Store

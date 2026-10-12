@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Deep ink-navy background -->
+  <rect width="32" height="32" rx="4" fill="#0E1721" />
+
+  <!-- Rope loop at top -->
+  <path d="M16 5.5 C14.5 5.5 13.8 7 13.8 8.8 L14.5 9 C15 7.8 15.5 7 16 7 C16.5 7 17 7.8 17.5 9 L18.2 8.8 C18.2 7 17.5 5.5 16 5.5 Z" fill="#D3A74C" stroke="#0E1721" stroke-width="0.4" />
+
+  <!-- Purse ruffled collar top -->
+  <path d="M12.5 9 C13.5 10.2 14.5 10.8 16 10.8 C17.5 10.8 18.5 10.2 19.5 9 L20.2 10.5 C18.8 11.6 17.5 12 16 12 C14.5 12 13.2 11.6 11.8 10.5 Z" fill="#B88628" />
+
+  <!-- Cinched rope knot band -->
+  <rect x="12" y="11.2" width="8" height="2.2" rx="1.1" fill="#E2BD68" stroke="#8E6516" stroke-width="0.5" />
+  <line x1="14.2" y1="11.2" x2="13.8" y2="13.4" stroke="#8E6516" stroke-width="0.5" />
+  <line x1="16" y1="11.2" x2="15.8" y2="13.4" stroke="#8E6516" stroke-width="0.5" />
+  <line x1="17.8" y1="11.2" x2="17.6" y2="13.4" stroke="#8E6516" stroke-width="0.5" />
+
+  <!-- Coin purse main body (brass) -->
+  <path d="M12.2 13 C9.5 14 7.5 17 7.5 21 C7.5 24.5 10.5 26.5 16 26.5 C21.5 26.5 24.5 24.5 24.5 21 C24.5 17 22.5 14 19.8 13 C18.5 14.2 13.5 14.2 12.2 13 Z" fill="#C59333" stroke="#8A6316" stroke-width="0.6" />
+
+  <!-- Brass highlight & fold shadow -->
+  <path d="M16 13.8 C18.2 15 22 17.8 22.2 21 C22.2 23.5 20 25.2 16 25.4" fill="none" stroke="#DDB357" stroke-width="0.8" stroke-linecap="round" />
+  <path d="M10 21 C10 18 11.5 15.5 13 14" fill="none" stroke="#8A6316" stroke-width="0.6" opacity="0.6" />
+
+  <!-- Small unbroken sealing-wax red seal on the lower right flank -->
+  <circle cx="19.5" cy="20.5" r="3.2" fill="#992323" stroke="#661010" stroke-width="0.4" />
+  <circle cx="19.5" cy="20.5" r="2.2" fill="none" stroke="#C43B3B" stroke-width="0.5" />
+  <circle cx="19.5" cy="20.5" r="1.1" fill="#841B1B" />
+</svg>
