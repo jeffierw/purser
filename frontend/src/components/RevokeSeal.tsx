@@ -32,24 +32,23 @@ export const RevokeSeal: React.FC<RevokeSealProps> = ({ onRevokeAll, hasActiveWa
         </div>
         <div className="sup-titlecell">
           <div className="sup-title-meta">
-            <span className="sup-kicker kicker-danger">COMMAND SANCTION</span>
+            <span className="sup-kicker kicker-danger">REVOKE</span>
             <span className="sup-pill-status pill-danger">
-              <i>●</i> Absolute Revocation
+              <i>●</i> Every grant
             </span>
           </div>
-          <h2 className="sup-h2">Revocation of Authority</h2>
+          <h2 className="sup-h2">Pull every grant</h2>
           <p className="sup-section-lede">
-            Breaks the seal upon the strongbox. Instantly strikes every grant void across the entire ship.
+            One tap stops every allowance. Funds stay in the wallet. The agent cannot co-sign, and the keys do not rotate.
           </p>
         </div>
       </div>
 
       <div className="sup-revoke-bento">
         <div className="revoke-bento-left">
-          <h3 className="bento-revoke-title">One Stroke Nullification</h3>
+          <h3 className="bento-revoke-title">Off in one tap</h3>
           <p className="bento-revoke-desc">
-            Unlike granular parameter tweaks, breaking the seal resets the active epoch across the entire smart contract. 
-            All outstanding limits dissolve instantly. The operator is immobilized until a completely new warrant is drafted aboard.
+            Pulling every grant advances the epoch. Each allowance stops together. A single grant can still be pulled on its own card, and that leaves the rest running.
           </p>
           <div className="revoke-stats-row">
             <div className="revoke-stat">

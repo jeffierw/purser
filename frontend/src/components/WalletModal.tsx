@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { connectInjectedWallet, walletErrorMessage } from '../contracts/wallet';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -7,34 +8,24 @@ interface WalletModalProps {
 }
 
 export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, onConnect }) => {
+  const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
+
   if (!isOpen) return null;
 
-  const walletOptions = [
-    {
-      id: 'browser',
-      name: 'Browser Wallet (Injected)',
-      desc: 'MetaMask, Rabby, OKX or default provider',
-      icon: '🦊',
-      defaultAddress: '0x8b32A247c4b07Ccf8e5d36e298516c944Dfc108C',
-      role: 'owner' as const,
-    },
-    {
-      id: 'passkey',
-      name: 'Passkey / Hardware Enclave',
-      desc: 'FIDO2 WebAuthn biometric security',
-      icon: '✦',
-      defaultAddress: '0x8b32A247c4b07Ccf8e5d36e298516c944Dfc108C',
-      role: 'owner' as const,
-    },
-    {
-      id: 'operator_agent',
-      name: 'Operator / Agent Session Key',
-      desc: 'Pre-authorized delegate address',
-      icon: '⚙',
-      defaultAddress: '0x3F88cA37E84B5B49d863581775796f61F1E67C92',
-      role: 'operator' as const,
-    },
-  ];
+  const connect = async () => {
+    setError('');
+    setPending(true);
+    try {
+      const session = await connectInjectedWallet();
+      onConnect(session.walletName, session.address, session.role);
+      onClose();
+    } catch (err) {
+      setError(walletErrorMessage(err));
+    } finally {
+      setPending(false);
+    }
+  };
 
   return (
     <div className="sup-modal-overlay" onClick={onClose}>
@@ -42,7 +33,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, onCon
         <div className="wallet-modal-header">
           <div>
             <h3 className="wallet-modal-title">Connect Wallet</h3>
-            <p className="wallet-modal-sub">Choose a custody provider or operator key</p>
+            <p className="wallet-modal-sub">Monad Testnet. The strongbox assigns owner or operator.</p>
           </div>
           <button type="button" className="modal-close-btn" onClick={onClose}>
             ✕
@@ -50,34 +41,23 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, onCon
         </div>
 
         <div className="wallet-list">
-          {walletOptions.map((w) => (
-            <button
-              key={w.id}
-              type="button"
-              className="wallet-option-btn"
-              onClick={() => {
-                onConnect(w.name, w.defaultAddress, w.role);
-                onClose();
-              }}
-            >
-              <span className="wallet-opt-icon">{w.icon}</span>
-              <div className="wallet-opt-text">
-                <div className="opt-name-row">
-                  <span className="opt-name">{w.name}</span>
-                  <span className={`opt-tag ${w.role === 'owner' ? 'tag-owner' : 'tag-op'}`}>
-                    {w.role === 'owner' ? 'Owner Account' : 'Operator Key'}
-                  </span>
-                </div>
-                <span className="opt-desc">{w.desc}</span>
+          <button type="button" className="wallet-option-btn" disabled={pending} onClick={() => void connect()}>
+            <span className="wallet-opt-icon">🦊</span>
+            <div className="wallet-opt-text">
+              <div className="opt-name-row">
+                <span className="opt-name">Browser Wallet</span>
               </div>
-              <span className="opt-arrow">→</span>
-            </button>
-          ))}
+              <span className="opt-desc">MetaMask, Rabby, or another injected wallet</span>
+            </div>
+            <span className="opt-arrow">→</span>
+          </button>
         </div>
+
+        {error ? <p className="lg-connect-error">{error}</p> : null}
 
         <div className="wallet-modal-footer">
           <span className="footer-safe-hint">
-            🔒 Self-custodial connection. Purser never accesses your private keys.
+            Self-custodial connection. Purser never receives the private key.
           </span>
         </div>
       </div>

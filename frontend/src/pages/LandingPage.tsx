@@ -21,7 +21,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchApp }) => {
             <a href="#custody" className="nav-link">Custody Model</a>
             <a href="#warrants" className="nav-link">Typed Warrants</a>
             <a href="#pipeline" className="nav-link">Policy Pipeline</a>
-            <a href="#monad" className="nav-link">Monad Port</a>
           </nav>
 
           <div className="nav-action-area">

@@ -1,34 +1,43 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { SUPPORTED_TOKENS } from '../mockContractState';
 import type { Budget, Token } from '../types';
+import { UNISWAP_FEE_TIERS, UNISWAP_V4_SWAP_ACTION, VENUES, venueByAction } from '../contracts/venues';
+import { CargoSelect } from './CargoSelect';
 import { WaxSeal } from './WaxSeal';
 
 interface OwnerWarrantProps {
   warrants: Record<string, Budget>;
   currentEpoch: number;
   operatorAddress: string;
+  mode?: 'owner' | 'agent';
   onUpdateOperator: (address: string) => void;
   onSaveWarrant: (warrant: Budget) => void;
+  onRevokeGrant?: (actionId: string, tokenAddress: string) => void;
 }
 
 export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
   warrants,
   currentEpoch,
   operatorAddress,
+  mode = 'owner',
   onUpdateOperator,
   onSaveWarrant,
+  onRevokeGrant,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [tokenInAddress, setTokenInAddress] = useState<string>(SUPPORTED_TOKENS[1].address);
+  const [actionId, setActionId] = useState<string>(VENUES[0].actionId);
+  const [feeTier, setFeeTier] = useState<string>(String(UNISWAP_FEE_TIERS[2].fee));
+  const [tokenInAddress, setTokenInAddress] = useState<string>(SUPPORTED_TOKENS[0].address);
   const [remainingBudget, setRemainingBudget] = useState<string>('1000');
   const [perTxCap, setPerTxCap] = useState<string>('250');
   const [expiryOption, setExpiryOption] = useState<'none' | 'date'>('none');
   const [expiryDate, setExpiryDate] = useState<string>('');
-  const [allowedDestinations, setAllowedDestinations] = useState<string[]>([
-    SUPPORTED_TOKENS[0].address,
-    SUPPORTED_TOKENS[2].address,
-  ]);
+  const [allowedDestinations, setAllowedDestinations] = useState<string[]>([SUPPORTED_TOKENS[1].address]);
   const [operatorInput, setOperatorInput] = useState<string>(operatorAddress);
+
+  useEffect(() => {
+    setOperatorInput(operatorAddress);
+  }, [operatorAddress]);
 
   const warrantList = Object.values(warrants);
 
@@ -53,7 +62,16 @@ export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
       validUntilTs = new Date(expiryDate).getTime();
     }
 
+    const venue = venueByAction(actionId);
+    const tier = UNISWAP_FEE_TIERS.find((item) => String(item.fee) === feeTier) ?? UNISWAP_FEE_TIERS[2];
+    const isUniswap = actionId.toLowerCase() === UNISWAP_V4_SWAP_ACTION.toLowerCase();
+
     const newWarrant: Budget = {
+      actionId,
+      protocol: venue?.protocol ?? 'Venue',
+      action: venue?.action ?? 'Swap',
+      fee: isUniswap ? tier.fee : null,
+      tickSpacing: isUniswap ? tier.tickSpacing : null,
       tokenAddress: tokenInAddress,
       remaining: remainingBudget,
       perTxCap: perTxCap,
@@ -81,43 +99,82 @@ export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
         </div>
         <div className="sup-titlecell">
           <div className="sup-title-meta">
-            <span className="sup-kicker">TYPED ALLOWANCES</span>
+            <span className="sup-kicker">ALLOWANCE</span>
             <span className="sup-pill-status">
-              <i>●</i> Policy Bound
+              <i>●</i> One grant per asset
             </span>
           </div>
-          <h2 className="sup-h2">The Warrant</h2>
+          <h2 className="sup-h2">The grant</h2>
           <p className="sup-section-lede">
-            A grant names token, remaining budget, per-trade cap, window, and permitted output pairs.
+            A grant names the protocol, the action, the asset, and the ceiling. Kuru and Uniswap v4 are pinned separately. Pulling one leaves the other running.
           </p>
         </div>
         <div className="sup-section-cta">
-          {!isEditing && (
+          {mode === 'owner' && !isEditing && (
             <button
               type="button"
               className="sup-action-btn primary"
               onClick={() => setIsEditing(true)}
             >
-              Draft new warrant
+              Grant an allowance
             </button>
           )}
         </div>
       </div>
 
-      {isEditing ? (
+      {mode === 'owner' && isEditing ? (
         <div className="sup-draft-bento">
           <div className="draft-bento-head">
             <div>
-              <span className="sup-card-tier">WARRANT SPECIFICATION</span>
-              <h3 className="draft-bento-title">Draft Commission of Expenditure</h3>
+              <span className="sup-card-tier">GRANT</span>
+              <h3 className="draft-bento-title">Name the four things</h3>
             </div>
             <span className="draft-seal-hint">Requires Captain’s Seal to Enforce</span>
           </div>
 
           <form onSubmit={handleFormSubmit} className="sup-draft-form">
             {/* Operator Address */}
+            <div className="sup-form-row">
+              <div className="sup-form-group">
+                <label className="sup-form-label">PROTOCOL</label>
+                <CargoSelect
+                  ariaLabel="Protocol"
+                  value={actionId}
+                  onChange={setActionId}
+                  options={VENUES.map((venue) => ({
+                    value: venue.actionId,
+                    symbol: venue.protocol,
+                    name: venue.detail,
+                  }))}
+                />
+                <span className="sup-form-hint">{venueByAction(actionId)?.hint}</span>
+              </div>
+              <div className="sup-form-group">
+                <label className="sup-form-label">ACTION</label>
+                <div className="sup-input">Swap</div>
+                <span className="sup-form-hint">A swap grant cannot withdraw.</span>
+              </div>
+            </div>
+
+            {actionId.toLowerCase() === UNISWAP_V4_SWAP_ACTION.toLowerCase() ? (
+              <div className="sup-form-group">
+                <label className="sup-form-label">FEE TIER</label>
+                <CargoSelect
+                  ariaLabel="Uniswap fee tier"
+                  value={feeTier}
+                  onChange={setFeeTier}
+                  options={UNISWAP_FEE_TIERS.map((tier) => ({
+                    value: String(tier.fee),
+                    symbol: tier.label,
+                    name: `Tick spacing ${tier.tickSpacing}`,
+                  }))}
+                />
+                <span className="sup-form-hint">Only a hookless pool at this fee can fill the swap.</span>
+              </div>
+            ) : null}
+
             <div className="sup-form-group">
-              <label className="sup-form-label">OPERATOR'S IDENTITY (PURSER ADDRESS)</label>
+              <label className="sup-form-label">AGENT ADDRESS</label>
               <input
                 type="text"
                 required
@@ -126,31 +183,29 @@ export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
                 placeholder="0x…"
                 className="sup-input font-mono"
               />
-              <span className="sup-form-hint">The Captain can replace this delegate address at any hour.</span>
+              <span className="sup-form-hint">The agent acts inside this grant and never holds the withdrawal key.</span>
             </div>
 
             <div className="sup-form-row">
               <div className="sup-form-group">
-                <label className="sup-form-label">TOKEN TO SPEND</label>
-                <select
+                <label className="sup-form-label">ASSET</label>
+                <CargoSelect
+                  ariaLabel="Token to spend"
                   value={tokenInAddress}
-                  onChange={(e) => {
-                    const addr = e.target.value;
+                  onChange={(addr) => {
                     setTokenInAddress(addr);
                     setAllowedDestinations(allowedDestinations.filter((a) => a !== addr));
                   }}
-                  className="sup-select"
-                >
-                  {SUPPORTED_TOKENS.map((t) => (
-                    <option key={t.address} value={t.address}>
-                      {t.symbol} — {t.name}
-                    </option>
-                  ))}
-                </select>
+                  options={SUPPORTED_TOKENS.map((token) => ({
+                    value: token.address,
+                    symbol: token.symbol,
+                    name: token.name,
+                  }))}
+                />
               </div>
 
               <div className="sup-form-group">
-                <label className="sup-form-label">TOTAL AUTHORIZED BUDGET</label>
+                <label className="sup-form-label">CEILING</label>
                 <div className="sup-input-affix">
                   <input
                     type="number"
@@ -256,7 +311,7 @@ export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
                 Discard Draft
               </button>
               <button type="submit" className="sup-btn-highlight">
-                Affix Seal & Post Warrant <span>→</span>
+                Post grant <span>→</span>
               </button>
             </div>
           </form>
@@ -267,17 +322,21 @@ export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
             <div className="sup-empty-card">
               <div className="sup-empty-inner">
                 <span className="empty-ico">📜</span>
-                <h3 className="empty-title">No warrant written</h3>
+                <h3 className="empty-title">No grant yet</h3>
                 <p className="empty-text">
-                  Without an active commission, the purser has zero allowance to spend or settle any coin aboard.
+                  {mode === 'agent'
+                    ? 'This agent has no allowance. It cannot swap until the owner posts a grant.'
+                    : 'Until a grant is posted, the agent has nothing it is allowed to spend.'}
                 </p>
-                <button
-                  type="button"
-                  className="sup-action-btn primary"
-                  onClick={() => setIsEditing(true)}
-                >
-                  Write First Warrant
-                </button>
+                {mode === 'owner' ? (
+                  <button
+                    type="button"
+                    className="sup-action-btn primary"
+                    onClick={() => setIsEditing(true)}
+                  >
+                    Grant an allowance
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : (
@@ -287,19 +346,19 @@ export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
 
               return (
                 <article
-                  key={warrant.tokenAddress}
+                  key={`${warrant.actionId}:${warrant.tokenAddress}`}
                   className={`sup-warrant-notice-bento ${isSealIntact ? 'status-active' : 'status-revoked'}`}
                 >
                   <div className="notice-bento-top">
                     <div>
                       <div className="notice-bento-meta">
-                        <span className="meta-tag">MONAD HARBOR POSTED NOTICE</span>
+                        <span className="meta-tag">{(warrant.protocol || 'Venue').toUpperCase()} · {(warrant.action || 'Swap').toUpperCase()}</span>
                         <span className={`meta-status-pill ${isSealIntact ? 'pill-green' : 'pill-red'}`}>
-                          <i>●</i> {isSealIntact ? 'IN FORCE' : 'SEAL BROKEN'}
+                          <i>●</i> {isSealIntact ? 'IN FORCE' : 'PULLED'}
                         </span>
                       </div>
                       <h3 className="notice-bento-heading">
-                        Authorization for {inToken?.symbol}
+                        Swap {inToken?.symbol} on {warrant.protocol}
                       </h3>
                       <p className="notice-delegate-row">
                         Assigned Purser:{' '}
@@ -321,7 +380,25 @@ export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
                   {/* Numbers Grid */}
                   <div className="notice-metrics-bento">
                     <div className="metric-box">
-                      <span className="metric-label">REMAINING BUDGET</span>
+                      <span className="metric-label">PROTOCOL</span>
+                      <div className="metric-val-wrap">
+                        <span className="metric-text">{warrant.protocol}</span>
+                      </div>
+                    </div>
+                    <div className="metric-box">
+                      <span className="metric-label">ACTION</span>
+                      <div className="metric-val-wrap">
+                        <span className="metric-text">{warrant.action}</span>
+                      </div>
+                    </div>
+                    <div className="metric-box">
+                      <span className="metric-label">ASSET</span>
+                      <div className="metric-val-wrap">
+                        <span className="metric-text">{inToken?.symbol}</span>
+                      </div>
+                    </div>
+                    <div className="metric-box">
+                      <span className="metric-label">CEILING</span>
                       <div className="metric-val-wrap">
                         <span className="metric-number">{warrant.remaining}</span>
                         <span className="metric-unit">{inToken?.symbol}</span>
@@ -369,19 +446,28 @@ export const OwnerWarrant: React.FC<OwnerWarrantProps> = ({
                     <div className="venues-pipeline-chips">
                       <div className="venue-chip active-chip">
                         <span className="dot-live">●</span>
-                        <span className="v-name">Swap</span>
-                        <span className="v-detail">Kuru Flow Router</span>
-                      </div>
-                      <div className="venue-chip blank-chip">
-                        <span className="blank-bar" />
+                        <span className="v-name">{warrant.action}</span>
+                        <span className="v-detail">{warrant.protocol}</span>
                       </div>
                     </div>
                   </div>
 
+                  {mode === 'owner' && isSealIntact && onRevokeGrant ? (
+                    <div className="draft-actions-bar">
+                      <button
+                        type="button"
+                        className="sup-btn-plain"
+                        onClick={() => onRevokeGrant(warrant.actionId, warrant.tokenAddress)}
+                      >
+                        Pull this grant
+                      </button>
+                    </div>
+                  ) : null}
+
                   {!isSealIntact && (
                     <div className="notice-invalid-bar">
                       <span className="invalid-ico">⚠</span>
-                      <span>This warrant was nullified by order of the Captain. The seal is broken; no expenditures will settle.</span>
+                      <span>This grant is pulled. The agent cannot spend this asset. Other grants stay in force.</span>
                     </div>
                   )}
                 </article>

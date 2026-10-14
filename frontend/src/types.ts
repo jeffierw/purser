@@ -7,6 +7,11 @@ export interface Token {
 }
 
 export interface Budget {
+  actionId: string;
+  protocol: string;
+  action: string;
+  fee: number | null;
+  tickSpacing: number | null;
   tokenAddress: string;
   remaining: string;
   perTxCap: string;

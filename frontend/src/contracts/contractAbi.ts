@@ -1,3 +1,15 @@
+/** Matches `PurserStrongbox.KURU_FLOW_SWAP`. Mainnet Kuru Flow entrypoint, not on testnet. */
+export const KURU_FLOW_SWAP_ACTION =
+  '0x7f2cf91e67731ac2a3241f80060da0da599bd393e6749e798e01d441ebe4f574' as const;
+
+/** Matches `PurserStrongbox.KURU_CLOB_SWAP`. */
+export const KURU_CLOB_SWAP_ACTION =
+  '0x7c37602c2e63dc711a8794b98057b9ef1118fd13528f044b0e9e1064ee4cc8ae' as const;
+
+/** Matches `PurserStrongbox.UNISWAP_V4_SWAP`. */
+export const UNISWAP_V4_SWAP_ACTION =
+  '0xfd91107d0462541f1a47749a58d5bdbe9a7ee950c15b5dd73d2859d9291dd22e' as const;
+
 export const KURU_DELEGATED_SPEND_ABI = [
   // Read Functions
   {
@@ -16,9 +28,19 @@ export const KURU_DELEGATED_SPEND_ABI = [
   },
   {
     type: 'function',
-    name: 'entrypoint',
+    name: 'KURU_FLOW_SWAP',
     inputs: [],
-    outputs: [{ name: '', type: 'address' }],
+    outputs: [{ name: '', type: 'bytes32' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'actions',
+    inputs: [{ name: 'actionId', type: 'bytes32' }],
+    outputs: [
+      { name: 'adapter', type: 'address' },
+      { name: 'enabled', type: 'bool' },
+    ],
     stateMutability: 'view',
   },
   {
@@ -38,7 +60,10 @@ export const KURU_DELEGATED_SPEND_ABI = [
   {
     type: 'function',
     name: 'budgets',
-    inputs: [{ name: 'tokenIn', type: 'address' }],
+    inputs: [
+      { name: 'actionId', type: 'bytes32' },
+      { name: 'tokenIn', type: 'address' },
+    ],
     outputs: [
       { name: 'remaining', type: 'uint256' },
       { name: 'perTxCap', type: 'uint256' },
@@ -52,6 +77,7 @@ export const KURU_DELEGATED_SPEND_ABI = [
     type: 'function',
     name: 'pairAllowed',
     inputs: [
+      { name: 'actionId', type: 'bytes32' },
       { name: 'tokenIn', type: 'address' },
       { name: 'tokenOut', type: 'address' },
     ],
@@ -69,8 +95,21 @@ export const KURU_DELEGATED_SPEND_ABI = [
   },
   {
     type: 'function',
-    name: 'setEntrypoint',
-    inputs: [{ name: 'next', type: 'address' }],
+    name: 'setAdapter',
+    inputs: [
+      { name: 'actionId', type: 'bytes32' },
+      { name: 'adapter', type: 'address' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'setActionEnabled',
+    inputs: [
+      { name: 'actionId', type: 'bytes32' },
+      { name: 'enabled', type: 'bool' },
+    ],
     outputs: [],
     stateMutability: 'nonpayable',
   },
@@ -78,6 +117,7 @@ export const KURU_DELEGATED_SPEND_ABI = [
     type: 'function',
     name: 'setPair',
     inputs: [
+      { name: 'actionId', type: 'bytes32' },
       { name: 'tokenIn', type: 'address' },
       { name: 'tokenOut', type: 'address' },
       { name: 'allowed', type: 'bool' },
@@ -89,10 +129,21 @@ export const KURU_DELEGATED_SPEND_ABI = [
     type: 'function',
     name: 'setBudget',
     inputs: [
+      { name: 'actionId', type: 'bytes32' },
       { name: 'token', type: 'address' },
       { name: 'remaining', type: 'uint256' },
       { name: 'perTxCap', type: 'uint256' },
       { name: 'validUntil', type: 'uint64' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'revokeBudget',
+    inputs: [
+      { name: 'actionId', type: 'bytes32' },
+      { name: 'token', type: 'address' },
     ],
     outputs: [],
     stateMutability: 'nonpayable',
@@ -136,16 +187,17 @@ export const KURU_DELEGATED_SPEND_ABI = [
   // Write Function (Operator / Delegate)
   {
     type: 'function',
-    name: 'spend',
+    name: 'execute',
     inputs: [
+      { name: 'actionId', type: 'bytes32' },
       { name: 'tokenIn', type: 'address' },
       { name: 'tokenOut', type: 'address' },
       { name: 'amountIn', type: 'uint256' },
       { name: 'minAmountOut', type: 'uint256' },
-      { name: 'program', type: 'bytes' },
+      { name: 'data', type: 'bytes' },
     ],
-    outputs: [{ name: 'amountOut', type: 'uint256' }],
-    stateMutability: 'payable',
+    outputs: [{ name: 'gained', type: 'uint256' }],
+    stateMutability: 'nonpayable',
   },
 
   // Events

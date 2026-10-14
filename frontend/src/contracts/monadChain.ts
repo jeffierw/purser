@@ -1,4 +1,4 @@
-import { defineChain } from 'viem';
+import { defineChain, getAddress } from 'viem';
 
 export const monadTestnet = defineChain({
   id: 10143,
@@ -25,5 +25,9 @@ export const monadTestnet = defineChain({
   testnet: true,
 });
 
-export const DEFAULT_CONTRACT_ADDRESS = '0x992B92B08a79243781254394eDEB1578F8A1eC00' as `0x${string}`;
-export const DEFAULT_KURU_ENTRYPOINT = '0x0000000000000000000000000000000000002222' as `0x${string}`;
+/** The first strongbox, owned by the deploy key. New sailors open their own through the factory. */
+export const DEFAULT_CONTRACT_ADDRESS = getAddress('0x2399D477400A9390776884e9575b914fe1E44174');
+
+/** Shared factory. `open` pins the already-deployed Kuru and Uniswap v4 adapters. */
+export const FACTORY_ADDRESS = getAddress('0xB7bDDe084B1196a8E561600241AAd636FBE2ED73');
+

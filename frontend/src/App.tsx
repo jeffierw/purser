@@ -1,16 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   type ContractState,
-  loadContractState,
-  saveContractState,
+  clearBook,
+  emptyBook,
+  emptyHold,
+  formatCargoAmount,
+  openBookForSession,
+  saveBook,
   SUPPORTED_TOKENS,
-  CONTRACT_STRONGBOX_ADDRESS,
-  OWNER_ADDRESS,
-  DEFAULT_OPERATOR_ADDRESS,
 } from './mockContractState';
 import type { Token, Budget, ShipLogEntry } from './types';
-import { monadService } from './contracts/contractService';
-import type { Address } from 'viem';
+import { monadService, publicClient } from './contracts/contractService';
+import { grantKey, routeForGrant } from './contracts/venues';
+import { disconnectMera } from './contracts/mera';
+import { FundEmbeddedWallet } from './components/FundEmbeddedWallet';
+import { PRIVY_APP_ID } from './privy';
+import type { Address, Hex } from 'viem';
+import { formatUnits } from 'viem';
 import { Logo } from './components/Logo';
 import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
@@ -18,6 +24,8 @@ import { OwnerHold } from './components/OwnerHold';
 import { OwnerWarrant } from './components/OwnerWarrant';
 import { RevokeSeal } from './components/RevokeSeal';
 import { OperatorSettle } from './components/OperatorSettle';
+import { GrantInterpreter } from './components/GrantInterpreter';
+import { OpenStrongbox } from './components/OpenStrongbox';
 import { ShipLog } from './components/ShipLog';
 
 type PageRoute = 'landing' | 'login' | 'app';
@@ -32,12 +40,16 @@ export const App: React.FC = () => {
   });
 
   // Wallet / Session State
-  const [accountAddress, setAccountAddress] = useState<string>(OWNER_ADDRESS);
+  const [accountAddress, setAccountAddress] = useState<string>('');
   const [activeRole, setActiveRole] = useState<'owner' | 'operator'>('owner');
   const [connectedWalletName, setConnectedWalletName] = useState<string>('Browser Wallet');
+  const [boxReady, setBoxReady] = useState(false);
+  const [strongboxAddress, setStrongboxAddress] = useState('');
+  const [openingBox, setOpeningBox] = useState(false);
 
-  // Contract State
-  const [contractState, setContractState] = useState<ContractState>(() => loadContractState());
+  // Contract State — empty until a wallet opens its own book
+  const [contractState, setContractState] = useState<ContractState>(() => emptyBook());
+  const [walletBalances, setWalletBalances] = useState<Record<string, string>>(() => emptyHold());
   const [viewingEmblemModal, setViewingEmblemModal] = useState<boolean>(false);
   const [txToast, setTxToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
 
@@ -49,25 +61,41 @@ export const App: React.FC = () => {
   };
 
   useEffect(() => {
-    saveContractState(contractState);
+    saveBook(contractState);
   }, [contractState]);
 
-  // Attempt to sync on-chain state if accessible
-  const syncOnChainState = useCallback(async () => {
-    try {
-      const core = await monadService.readCoreState();
-      if (core) {
-        setContractState((prev) => ({
-          ...prev,
-          epoch: Number(core.epoch),
-          owner: core.owner,
-          operator: core.delegate,
-        }));
-      }
-    } catch {
-      // Keep local state
-    }
+  const refreshWalletBalances = useCallback(async (address: string) => {
+    const balances = await monadService.readHolderBalances(address as Address, SUPPORTED_TOKENS);
+    setWalletBalances(balances);
   }, []);
+
+  // Chain data replaces the book only when the strongbox is actually deployed.
+  const syncOnChainState = useCallback(async () => {
+    if (!accountAddress) return;
+    try {
+      await refreshWalletBalances(accountAddress);
+      const presence = await monadService.readStrongboxPresence();
+      if (presence !== 'ready') return;
+      const box = monadService.strongboxAddress();
+      const [core, vault] = await Promise.all([
+        monadService.readCoreState(),
+        monadService.readHolderBalances(box, SUPPORTED_TOKENS),
+      ]);
+      setContractState((prev) => ({
+        ...prev,
+        hold: vault,
+        ...(core
+          ? {
+              epoch: Number(core.epoch),
+              owner: core.owner,
+              operator: core.delegate,
+            }
+          : {}),
+      }));
+    } catch {
+      // Keep this wallet's book
+    }
+  }, [accountAddress, refreshWalletBalances]);
 
   useEffect(() => {
     if (currentRoute === 'app') {
@@ -95,17 +123,69 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const handleLoginSuccess = (address: string, role: 'owner' | 'operator', walletName: string) => {
+  const handleLoginSuccess = (
+    address: string,
+    role: 'owner' | 'operator',
+    walletName: string,
+    deployed = true
+  ) => {
     setAccountAddress(address);
     setActiveRole(role);
     setConnectedWalletName(walletName);
+    setBoxReady(deployed);
+    setStrongboxAddress(deployed ? monadService.strongboxAddress() : '');
+    setContractState(openBookForSession(address, role));
+    setWalletBalances(emptyHold());
+    void refreshWalletBalances(address);
     navigateTo('app');
-    showToast(`Connected ${walletName} (${address.slice(0, 6)}…${address.slice(-4)})`, 'success');
+    const short = `${address.slice(0, 6)}…${address.slice(-4)}`;
+    if (!deployed) {
+      showToast(`${short} has no strongbox yet. Open one on Monad Testnet. You pay the gas.`, 'info');
+      return;
+    }
+    showToast(`Connected ${walletName} (${short})`, 'success');
   };
 
   const handleLogout = () => {
+    disconnectMera();
+    monadService.useStrongbox(null);
+    setAccountAddress('');
+    setBoxReady(false);
+    setStrongboxAddress('');
     navigateTo('landing');
     showToast('Disconnected from strongbox session', 'info');
+  };
+
+  const handleOpenStrongbox = async () => {
+    setOpeningBox(true);
+    showToast('Opening your strongbox on Monad Testnet…', 'info');
+    try {
+      const box = await monadService.openStrongbox(accountAddress as Address);
+      setStrongboxAddress(box);
+      setBoxReady(true);
+      setContractState((prev) => ({
+        ...prev,
+        owner: accountAddress,
+        operator: accountAddress,
+      }));
+      showToast('Strongbox opened. You are the owner and the agent.', 'success');
+      void syncOnChainState();
+    } catch (error) {
+      showToast(chainFailureMessage(error, 'The strongbox was not opened.'), 'error');
+    } finally {
+      setOpeningBox(false);
+    }
+  };
+
+  const chainFailureMessage = (error: unknown, fallback: string): string => {
+    const message = error instanceof Error ? error.message : fallback;
+    if (/does not have any code|returned no data/i.test(message)) {
+      return 'This strongbox could not be read on Monad Testnet. Try again in a moment.';
+    }
+    if (/execution reverted|user rejected|user denied/i.test(message)) {
+      return 'The strongbox refused that transaction, or the wallet window closed. Nothing else was changed.';
+    }
+    return message.length > 180 ? fallback : message;
   };
 
   const makeTxHash = (): string => {
@@ -129,23 +209,25 @@ export const App: React.FC = () => {
 
   const handleDeposit = async (token: Token, amount: string) => {
     showToast(`Broadcasting deposit of ${amount} ${token.symbol} to Monad…`, 'info');
-    let txHash = makeTxHash();
 
+    let txHash: string;
     try {
-      if (token.isNative) {
-        const hash = await monadService.depositNative(accountAddress as Address, amount);
-        if (hash) txHash = `${hash.slice(0, 10)}…`;
-      } else {
-        const hash = await monadService.depositToken(
-          accountAddress as Address,
-          token.address as Address,
-          amount,
-          token.decimals
-        );
-        if (hash) txHash = `${hash.slice(0, 10)}…`;
+      const hash = token.isNative
+        ? await monadService.depositNative(accountAddress as Address, amount)
+        : await monadService.depositToken(
+            accountAddress as Address,
+            token.address as Address,
+            amount,
+            token.decimals
+          );
+      if (!hash) {
+        showToast('The strongbox did not accept that deposit.', 'error');
+        return;
       }
+      txHash = `${hash.slice(0, 10)}…`;
     } catch (e) {
-      console.info('[Purser] On-chain call fallback to local execution:', e);
+      showToast(chainFailureMessage(e, 'The deposit was not accepted.'), 'error');
+      return;
     }
 
     const cur = parseFloat(contractState.hold[token.address] || '0');
@@ -166,14 +248,15 @@ export const App: React.FC = () => {
       },
       logs: [newLog, ...prev.logs],
     }));
+    void refreshWalletBalances(accountAddress);
 
-    showToast(`Deposited ${amount} ${token.symbol} aboard • Monad Confirmed`, 'success');
+    showToast(`Deposited ${amount} ${token.symbol} aboard`, 'success');
   };
 
   const handleWithdraw = async (token: Token, amount: string) => {
     showToast(`Withdrawing ${amount} ${token.symbol} ashore…`, 'info');
-    let txHash = makeTxHash();
 
+    let txHash: string;
     try {
       const hash = await monadService.withdraw(
         accountAddress as Address,
@@ -182,9 +265,14 @@ export const App: React.FC = () => {
         accountAddress as Address,
         token.decimals
       );
-      if (hash) txHash = `${hash.slice(0, 10)}…`;
+      if (!hash) {
+        showToast('The strongbox did not accept that withdrawal.', 'error');
+        return;
+      }
+      txHash = `${hash.slice(0, 10)}…`;
     } catch (e) {
-      console.info('[Purser] On-chain call fallback to local execution:', e);
+      showToast(chainFailureMessage(e, 'The withdrawal was not accepted.'), 'error');
+      return;
     }
 
     const cur = parseFloat(contractState.hold[token.address] || '0');
@@ -209,6 +297,7 @@ export const App: React.FC = () => {
       logs: [newLog, ...prev.logs],
     }));
 
+    void refreshWalletBalances(accountAddress);
     showToast(`Withdrew ${amount} ${token.symbol} directly to owner address`, 'success');
   };
 
@@ -218,30 +307,52 @@ export const App: React.FC = () => {
 
     try {
       const inToken = SUPPORTED_TOKENS.find((t) => t.address.toLowerCase() === warrant.tokenAddress.toLowerCase());
-      // Set budget on chain
+      const tokenIn = warrant.tokenAddress as Address;
       const hash = await monadService.setBudget(
         accountAddress as Address,
-        warrant.tokenAddress as Address,
+        warrant.actionId as Hex,
+        tokenIn,
         warrant.remaining,
         warrant.perTxCap,
         warrant.validUntil,
         inToken?.decimals || 18
       );
-      if (hash) txHash = `${hash.slice(0, 10)}…`;
+      if (!hash) {
+        showToast('The strongbox did not post that grant.', 'error');
+        return;
+      }
+      txHash = `${hash.slice(0, 10)}…`;
 
-      // Set pair whitelists on chain
-      for (const outAddr of warrant.allowedTokensOut) {
-        await monadService.setPair(accountAddress as Address, warrant.tokenAddress as Address, outAddr as Address, true);
+      for (const token of SUPPORTED_TOKENS) {
+        if (token.address.toLowerCase() === tokenIn.toLowerCase()) continue;
+        const shouldAllow = warrant.allowedTokensOut.some(
+          (outAddr) => outAddr.toLowerCase() === token.address.toLowerCase()
+        );
+        const allowedNow = await monadService.readPairAllowed(
+          warrant.actionId as Hex,
+          tokenIn,
+          token.address as Address,
+        );
+        if (allowedNow === shouldAllow) continue;
+        await monadService.setPair(
+          accountAddress as Address,
+          warrant.actionId as Hex,
+          tokenIn,
+          token.address as Address,
+          shouldAllow,
+        );
       }
     } catch (e) {
-      console.info('[Purser] On-chain call fallback to local execution:', e);
+      const message = e instanceof Error ? e.message : 'The warrant was not posted.';
+      showToast(message, 'error');
+      return;
     }
 
     const inToken = SUPPORTED_TOKENS.find((t) => t.address.toLowerCase() === warrant.tokenAddress.toLowerCase());
     const newLog: ShipLogEntry = {
       id: Date.now().toString(),
       timestamp: getFormatTime(),
-      primaryText: `Grant authorized: Operator may spend ${warrant.remaining} ${inToken?.symbol || ''} (Cap: ${warrant.perTxCap}).`,
+      primaryText: `Grant authorized: ${warrant.protocol} may spend ${warrant.remaining} ${inToken?.symbol || ''} (Cap: ${warrant.perTxCap}).`,
       hash: txHash,
       type: 'grant',
     };
@@ -250,7 +361,7 @@ export const App: React.FC = () => {
       ...prev,
       warrants: {
         ...prev.warrants,
-        [warrant.tokenAddress]: warrant,
+        [grantKey(warrant.actionId, warrant.tokenAddress)]: warrant,
       },
       logs: [newLog, ...prev.logs],
     }));
@@ -259,26 +370,91 @@ export const App: React.FC = () => {
   };
 
   const handleUpdateOperator = async (newOperator: string) => {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(newOperator)) {
+      showToast('The operator must be a wallet address.', 'error');
+      return;
+    }
+    let hash: Hex | null;
     try {
-      await monadService.setPair(accountAddress as Address, newOperator as Address, newOperator as Address, false);
-    } catch {
-      // fallback
+      hash = await monadService.setDelegate(accountAddress as Address, newOperator as Address);
+      if (!hash) {
+        showToast('The operator was not changed.', 'error');
+        return;
+      }
+      await publicClient.waitForTransactionReceipt({ hash });
+    } catch (e) {
+      showToast(chainFailureMessage(e, 'The operator was not changed.'), 'error');
+      return;
     }
     setContractState((prev) => ({
       ...prev,
       operator: newOperator,
     }));
+    try {
+      await monadService.linkDelegate(accountAddress as Address);
+    } catch {
+      showToast('The agent is set on the box. Their login link did not update. Save the agent once more.', 'error');
+      return;
+    }
+    showToast('Operator updated on the strongbox.', 'success');
+  };
+
+  const handleRevokeGrant = async (actionId: string, tokenAddress: string) => {
+    const token = SUPPORTED_TOKENS.find((item) => item.address.toLowerCase() === tokenAddress.toLowerCase());
+    const key = grantKey(actionId, tokenAddress);
+    showToast(`Pulling the ${token?.symbol ?? 'asset'} grant…`, 'info');
+    try {
+      const hash = await monadService.revokeBudget(
+        accountAddress as Address,
+        actionId as Hex,
+        tokenAddress as Address,
+      );
+      if (!hash) {
+        showToast('The strongbox did not pull that grant.', 'error');
+        return;
+      }
+    } catch (e) {
+      showToast(chainFailureMessage(e, 'That grant was not pulled.'), 'error');
+      return;
+    }
+
+    setContractState((prev) => ({
+      ...prev,
+      warrants: {
+        ...prev.warrants,
+        [key]: {
+          ...prev.warrants[key],
+          active: false,
+        },
+      },
+      logs: [
+        {
+          id: Date.now().toString(),
+          timestamp: getFormatTime(),
+          primaryText: `Pulled the ${token?.symbol ?? 'asset'} grant. Other grants stay in force.`,
+          hash: 'on-chain',
+          type: 'revoke',
+        },
+        ...prev.logs,
+      ],
+    }));
+    showToast(`The ${token?.symbol ?? 'asset'} grant is pulled. The others still run.`, 'success');
   };
 
   const handleRevokeAll = async () => {
     showToast(`Triggering emergency seal break on Monad contract…`, 'info');
-    let txHash = makeTxHash();
 
+    let txHash: string;
     try {
       const hash = await monadService.revokeAll(accountAddress as Address);
-      if (hash) txHash = `${hash.slice(0, 10)}…`;
+      if (!hash) {
+        showToast('The strongbox did not revoke the warrants.', 'error');
+        return;
+      }
+      txHash = `${hash.slice(0, 10)}…`;
     } catch (e) {
-      console.info('[Purser] On-chain call fallback to local execution:', e);
+      showToast(chainFailureMessage(e, 'The warrants were not revoked.'), 'error');
+      return;
     }
 
     const newEpoch = contractState.epoch + 1;
@@ -299,71 +475,91 @@ export const App: React.FC = () => {
     showToast(`All grants revoked! Contract epoch incremented to #${newEpoch}`, 'error');
   };
 
-  const handleSettle = (params: {
+  const handleSettle = async (params: {
+    warrant: Budget;
     tokenIn: Token;
     tokenOut: Token;
     amountIn: string;
     minAmountOut: string;
-    actualAmountOut: string;
-  }): { success: boolean; ruleError?: string } => {
-    const warrant = contractState.warrants[params.tokenIn.address];
+  }): Promise<{ success: boolean; ruleError?: string }> => {
+    const key = grantKey(params.warrant.actionId, params.tokenIn.address);
+    const warrant = contractState.warrants[key];
     if (!warrant || warrant.epoch !== contractState.epoch || !warrant.active) {
       return { success: false, ruleError: 'Warrant is void or revoked.' };
     }
 
-    const curHoldIn = parseFloat(contractState.hold[params.tokenIn.address] || '0');
-    const spendNum = parseFloat(params.amountIn);
-    if (spendNum > curHoldIn) {
-      return {
-        success: false,
-        ruleError: `Vault Deficit: Strongbox holds only ${curHoldIn} ${params.tokenIn.symbol}, unable to settle.`,
-      };
+    let route: Hex;
+    try {
+      route = routeForGrant(
+        warrant.actionId,
+        params.tokenIn.address,
+        params.tokenOut.address,
+        warrant.fee,
+        warrant.tickSpacing,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'This pair is not on the pinned venue.';
+      return { success: false, ruleError: message };
     }
 
-    const remNum = parseFloat(warrant.remaining);
-    const nextRem = (remNum - spendNum).toFixed(2);
-    const nextHoldIn = (curHoldIn - spendNum).toFixed(2);
-
-    const curHoldOut = parseFloat(contractState.hold[params.tokenOut.address] || '0');
-    const actualOutNum = parseFloat(params.actualAmountOut);
-    const nextHoldOut = (curHoldOut + actualOutNum).toFixed(2);
-
-    const newLog: ShipLogEntry = {
-      id: Date.now().toString(),
-      timestamp: getFormatTime(),
-      primaryText: `${params.amountIn} ${params.tokenIn.symbol} became ${params.actualAmountOut} ${params.tokenOut.symbol}. Came aboard.`,
-      hash: makeTxHash(),
-      type: 'spend',
-    };
-
-    setContractState((prev) => ({
-      ...prev,
-      hold: {
-        ...prev.hold,
-        [params.tokenIn.address]: nextHoldIn,
-        [params.tokenOut.address]: nextHoldOut,
-      },
-      warrants: {
-        ...prev.warrants,
-        [params.tokenIn.address]: {
-          ...warrant,
-          remaining: nextRem,
+    showToast(`Sending ${params.amountIn} ${params.tokenIn.symbol} through ${warrant.protocol}…`, 'info');
+    try {
+      const hash = await monadService.execute(
+        accountAddress as Address,
+        warrant.actionId as Hex,
+        params.tokenIn.address as Address,
+        params.tokenOut.address as Address,
+        params.amountIn,
+        params.minAmountOut,
+        route,
+        params.tokenIn.decimals,
+        params.tokenOut.decimals,
+      );
+      if (!hash) return { success: false, ruleError: 'The strongbox did not accept the swap.' };
+      await publicClient.waitForTransactionReceipt({ hash });
+      const [vault, budget] = await Promise.all([
+        monadService.readHolderBalances(monadService.strongboxAddress(), SUPPORTED_TOKENS),
+        monadService.readBudget(warrant.actionId as Hex, params.tokenIn.address as Address),
+      ]);
+      const remaining = budget ? formatUnits(budget.remaining, params.tokenIn.decimals) : warrant.remaining;
+      const newLog: ShipLogEntry = {
+        id: Date.now().toString(),
+        timestamp: getFormatTime(),
+        primaryText: `${params.amountIn} ${params.tokenIn.symbol} settled on ${warrant.protocol}. Output stayed aboard.`,
+        hash: `${hash.slice(0, 10)}…`,
+        type: 'spend',
+      };
+      setContractState((prev) => ({
+        ...prev,
+        hold: vault,
+        warrants: {
+          ...prev.warrants,
+          [key]: {
+            ...warrant,
+            remaining,
+            active: budget ? budget.active : warrant.active,
+          },
         },
-      },
-      logs: [newLog, ...prev.logs],
-    }));
-
-    showToast(
-      `${params.amountIn} ${params.tokenIn.symbol} → ${params.actualAmountOut} ${params.tokenOut.symbol} • Came aboard.`,
-      'success'
-    );
-
-    return { success: true };
+        logs: [newLog, ...prev.logs],
+      }));
+      showToast(`${params.tokenIn.symbol} settled on ${warrant.protocol}. Output is in the strongbox.`, 'success');
+      return { success: true };
+    } catch (error) {
+      return { success: false, ruleError: chainFailureMessage(error, 'The swap was not accepted.') };
+    }
   };
 
+  const canSettle =
+    boxReady &&
+    !!contractState.operator &&
+    contractState.operator.toLowerCase() === accountAddress.toLowerCase();
+
   const handleResetDawn = () => {
-    localStorage.removeItem('purser_strongbox_state_v1');
-    window.location.reload();
+    clearBook(contractState.owner);
+    const owner = activeRole === 'owner' ? accountAddress : contractState.owner;
+    const operator = activeRole === 'operator' ? accountAddress : '';
+    setContractState(emptyBook(owner, operator));
+    showToast('This wallet’s book is clear.', 'info');
   };
 
   const hasActiveWarrants = Object.values(contractState.warrants).some(
@@ -378,7 +574,7 @@ export const App: React.FC = () => {
       )}
 
       {/* 2. Login Page View (matching https://www.supwallet.app/login?next=%2Fapp) */}
-      {currentRoute === 'login' && (
+      {(currentRoute === 'login' || (currentRoute === 'app' && !accountAddress)) && (
         <LoginPage
           onLoginSuccess={handleLoginSuccess}
           onClose={() => navigateTo('landing')}
@@ -386,7 +582,7 @@ export const App: React.FC = () => {
       )}
 
       {/* 3. Authenticated App Dashboard (/app) */}
-      {currentRoute === 'app' && (
+      {currentRoute === 'app' && accountAddress && (
         <div className="sup-app-viewport">
           <div className="sup-grid-bg" aria-hidden="true" />
 
@@ -410,23 +606,16 @@ export const App: React.FC = () => {
                   <button
                     type="button"
                     className={`sup-nav-tab ${activeRole === 'owner' ? 'is-active' : ''}`}
-                    onClick={() => {
-                      setActiveRole('owner');
-                      setAccountAddress(OWNER_ADDRESS);
-                    }}
+                    disabled={activeRole !== 'owner'}
                   >
-                    <span>Vault & Allowances</span>
+                    <span>Wallet</span>
                   </button>
                   <button
                     type="button"
                     className={`sup-nav-tab ${activeRole === 'operator' ? 'is-active' : ''}`}
-                    onClick={() => {
-                      setActiveRole('operator');
-                      setAccountAddress(DEFAULT_OPERATOR_ADDRESS);
-                    }}
+                    disabled={activeRole !== 'operator'}
                   >
-                    <span>Operator Settle</span>
-                    <span className="tab-pill">Agent</span>
+                    <span>Agent</span>
                   </button>
                 </div>
               </div>
@@ -449,6 +638,12 @@ export const App: React.FC = () => {
                     <span>{accountAddress.slice(0, 6)}…{accountAddress.slice(-4)}</span>
                   </button>
 
+                  {PRIVY_APP_ID && connectedWalletName.startsWith('Privy') ? (
+                    <FundEmbeddedWallet
+                      address={accountAddress}
+                      onError={(message) => showToast(message, 'error')}
+                    />
+                  ) : null}
                   <button
                     type="button"
                     className="sup-disconnect-btn"
@@ -466,7 +661,21 @@ export const App: React.FC = () => {
           <div className="sup-meta-bar">
             <div className="meta-bar-in font-mono">
               <span className="meta-item">
-                <strong className="meta-k">STRONGBOX:</strong> {CONTRACT_STRONGBOX_ADDRESS.slice(0, 10)}…{CONTRACT_STRONGBOX_ADDRESS.slice(-8)}
+                <strong className="meta-k">STRONGBOX:</strong>{' '}
+                {strongboxAddress
+                  ? `${strongboxAddress.slice(0, 10)}…${strongboxAddress.slice(-8)}`
+                  : 'not opened'}
+              </span>
+              <span className="meta-div">/</span>
+              <span className="meta-item">
+                <strong className="meta-k">WALLET:</strong> {accountAddress.slice(0, 6)}…{accountAddress.slice(-4)}
+              </span>
+              <span className="meta-div">/</span>
+              <span className="meta-item">
+                <strong className="meta-k">OPERATOR:</strong>{' '}
+                {contractState.operator
+                  ? `${contractState.operator.slice(0, 6)}…${contractState.operator.slice(-4)}`
+                  : 'none yet'}
               </span>
               <span className="meta-div">/</span>
               <span className="meta-item">
@@ -474,18 +683,22 @@ export const App: React.FC = () => {
               </span>
               <span className="meta-div">/</span>
               <span className="meta-item">
-                <strong className="meta-k">ROUTER:</strong> KURU FLOW (ATOMIC RECEIVER)
+                <strong className="meta-k">VENUES:</strong> KURU ORDER BOOK · UNISWAP V4
               </span>
             </div>
           </div>
 
           {/* Main Dashboard Surface */}
           <main className="sup-main-container">
-            {activeRole === 'owner' ? (
+            {!boxReady ? (
+              <OpenStrongbox pending={openingBox} onOpen={handleOpenStrongbox} />
+            ) : activeRole === 'owner' ? (
               <div className="sup-deck-view">
                 {/* 01: The Hold */}
                 <OwnerHold
                   hold={contractState.hold}
+                  walletBalances={walletBalances}
+                  ownerAddress={accountAddress}
                   onDeposit={handleDeposit}
                   onWithdraw={handleWithdraw}
                 />
@@ -497,8 +710,10 @@ export const App: React.FC = () => {
                   warrants={contractState.warrants}
                   currentEpoch={contractState.epoch}
                   operatorAddress={contractState.operator}
+                  mode="owner"
                   onUpdateOperator={handleUpdateOperator}
                   onSaveWarrant={handleSaveWarrant}
+                  onRevokeGrant={handleRevokeGrant}
                 />
 
                 <div className="sup-section-divider" />
@@ -508,6 +723,23 @@ export const App: React.FC = () => {
                   onRevokeAll={handleRevokeAll}
                   hasActiveWarrants={hasActiveWarrants}
                 />
+
+                {canSettle ? (
+                  <>
+                    <div className="sup-section-divider" />
+                    <GrantInterpreter
+                      warrants={contractState.warrants}
+                      currentEpoch={contractState.epoch}
+                      onSettle={handleSettle}
+                    />
+                    <div className="sup-section-divider" />
+                    <OperatorSettle
+                      warrants={contractState.warrants}
+                      currentEpoch={contractState.epoch}
+                      onSettle={handleSettle}
+                    />
+                  </>
+                ) : null}
 
                 <div className="sup-section-divider" />
 
@@ -525,18 +757,41 @@ export const App: React.FC = () => {
                   <div className="hold-banner-chips">
                     {SUPPORTED_TOKENS.map((token) => {
                       const amount = contractState.hold[token.address] || '0';
+                      const walletAmount = walletBalances[token.address] || '0';
                       return (
                         <div key={token.address} className="banner-chip">
                           <span className="chip-token">{token.symbol}:</span>
-                          <span className="chip-amount font-mono">{amount}</span>
+                          <span className="chip-amount font-mono">{formatCargoAmount(amount)} aboard</span>
+                          <span className="ml-2 font-[family-name:var(--font-mono)] text-xs text-[#94A3B8]">
+                            wallet {formatCargoAmount(walletAmount)}
+                          </span>
                         </div>
                       );
                     })}
                   </div>
                   <p className="hold-banner-note">
-                    Operator executes within posted allowances. All trade yields return directly to this vault. Operator has zero withdrawal controls.
+                    This agent swaps only inside a posted grant. Output returns to the strongbox. Withdrawal stays with the owner.
                   </p>
                 </div>
+
+                <OwnerWarrant
+                  warrants={contractState.warrants}
+                  currentEpoch={contractState.epoch}
+                  operatorAddress={contractState.operator}
+                  mode="agent"
+                  onUpdateOperator={handleUpdateOperator}
+                  onSaveWarrant={handleSaveWarrant}
+                />
+
+                <div className="sup-section-divider" />
+
+                <GrantInterpreter
+                  warrants={contractState.warrants}
+                  currentEpoch={contractState.epoch}
+                  onSettle={handleSettle}
+                />
+
+                <div className="sup-section-divider" />
 
                 {/* Settle Engine with Verification Rail */}
                 <OperatorSettle
@@ -569,7 +824,7 @@ export const App: React.FC = () => {
                   onClick={handleResetDawn}
                   title="Reset voyage ledger to dawn state"
                 >
-                  ↺ Reset demo state
+                  ↺ Clear this book
                 </button>
               </div>
             </div>

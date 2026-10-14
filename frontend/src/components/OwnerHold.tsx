@@ -1,14 +1,23 @@
 import React, { useState } from 'react';
-import { SUPPORTED_TOKENS, OWNER_ADDRESS } from '../mockContractState';
+import { formatCargoAmount, SUPPORTED_TOKENS } from '../mockContractState';
 import type { Token } from '../types';
+import { CargoSelect } from './CargoSelect';
 
 interface OwnerHoldProps {
   hold: Record<string, string>;
+  walletBalances: Record<string, string>;
+  ownerAddress: string;
   onDeposit: (token: Token, amount: string) => void;
   onWithdraw: (token: Token, amount: string) => void;
 }
 
-export const OwnerHold: React.FC<OwnerHoldProps> = ({ hold, onDeposit, onWithdraw }) => {
+export const OwnerHold: React.FC<OwnerHoldProps> = ({
+  hold,
+  walletBalances,
+  ownerAddress,
+  onDeposit,
+  onWithdraw,
+}) => {
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState<Token | null>(null);
 
@@ -49,14 +58,16 @@ export const OwnerHold: React.FC<OwnerHoldProps> = ({ hold, onDeposit, onWithdra
         </div>
         <div className="sup-titlecell">
           <div className="sup-title-meta">
-            <span className="sup-kicker">CUSTODIAL RESERVE</span>
+            <span className="sup-kicker">SELF-CUSTODY</span>
             <span className="sup-pill-status">
-              <i>●</i> Strongbox Locked
+              <i>●</i> Keys stay here
             </span>
           </div>
-          <h2 className="sup-h2">The Hold</h2>
+          <h2 className="sup-h2">Wallet</h2>
           <p className="sup-section-lede">
-            Cargo tokens presently locked aboard the strongbox under the Captain’s sole withdrawal power.
+            {isEmpty
+              ? 'This wallet’s coins on Monad Testnet. Nothing is locked in the strongbox yet. Only you can withdraw.'
+              : 'Coins locked in the strongbox, beside what this wallet still holds. Only you can withdraw.'}
           </p>
         </div>
         <div className="sup-section-cta">
@@ -70,70 +81,55 @@ export const OwnerHold: React.FC<OwnerHoldProps> = ({ hold, onDeposit, onWithdra
         </div>
       </div>
 
-      {isEmpty ? (
-        <div className="sup-empty-card">
-          <div className="sup-empty-inner">
-            <span className="empty-ico">⚓︎</span>
-            <h3 className="empty-title">Nothing aboard yet</h3>
-            <p className="empty-text">
-              The hold lies completely vacant. Transfer native MON or ERC20 cargo into the strongbox contract to fund warrant allowances.
-            </p>
-            <button
-              type="button"
-              className="sup-action-btn primary"
-              onClick={() => setShowDepositModal(true)}
+      <div className="sup-hold-grid">
+        {SUPPORTED_TOKENS.map((token) => {
+          const amount = hold[token.address] || '0';
+          const walletAmount = walletBalances[token.address] || '0';
+          const hasBalance = parseFloat(amount) > 0;
+
+          return (
+            <div
+              key={token.address}
+              className={`sup-asset-card ${hasBalance ? 'is-active' : 'is-zero'}`}
             >
-              Put funds aboard
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="sup-hold-grid">
-          {SUPPORTED_TOKENS.map((token) => {
-            const amount = hold[token.address] || '0';
-            const hasBalance = parseFloat(amount) > 0;
-
-            return (
-              <div
-                key={token.address}
-                className={`sup-asset-card ${hasBalance ? 'is-active' : 'is-zero'}`}
-              >
-                <div className="asset-card-top">
-                  <div className="asset-identity">
-                    <span className="asset-symbol">{token.symbol}</span>
-                    <span className="asset-fullname">{token.name}</span>
-                  </div>
-                  <span className="asset-type-tag">
-                    {token.isNative ? 'Native Monad' : 'ERC-20 Cargo'}
-                  </span>
+              <div className="asset-card-top">
+                <div className="asset-identity">
+                  <span className="asset-symbol">{token.symbol}</span>
+                  <span className="asset-fullname">{token.name}</span>
                 </div>
-
-                <div className="asset-card-balance">
-                  <span className="balance-value">{amount}</span>
-                  <span className="balance-unit">{token.symbol}</span>
-                </div>
-
-                <div className="asset-card-foot">
-                  {hasBalance ? (
-                    <button
-                      type="button"
-                      className="sup-link-btn"
-                      onClick={() => {
-                        setShowWithdrawModal(token);
-                        setWithdrawAmount(amount);
-                      }}
-                    >
-                      Take ashore <span>→</span>
-                    </button>
-                  ) : (
-                    <span className="muted-dormant">Zero balance</span>
-                  )}
-                </div>
+                <span className="asset-type-tag">
+                  {token.isNative ? 'Native Monad' : 'ERC-20 Cargo'}
+                </span>
               </div>
-            );
-          })}
-        </div>
-      )}
+
+              <div className="asset-card-balance">
+                <span className="balance-value">{formatCargoAmount(amount)}</span>
+                <span className="balance-unit">{token.symbol} aboard</span>
+              </div>
+              <p className="mt-1 font-[family-name:var(--font-mono)] text-xs tracking-wide text-[#94A3B8]">
+                In this wallet · {formatCargoAmount(walletAmount)} {token.symbol}
+              </p>
+
+              <div className="asset-card-foot">
+                {hasBalance ? (
+                  <button
+                    type="button"
+                    className="sup-link-btn"
+                    onClick={() => {
+                      setShowWithdrawModal(token);
+                      setWithdrawAmount(amount);
+                    }}
+                  >
+                    Take ashore <span>→</span>
+                  </button>
+                ) : (
+                  <span className="muted-dormant">Nothing aboard</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
       {/* Put Funds Aboard Modal */}
       {showDepositModal && (
@@ -159,17 +155,16 @@ export const OwnerHold: React.FC<OwnerHoldProps> = ({ hold, onDeposit, onWithdra
 
               <div className="sup-form-group">
                 <label className="sup-form-label">CARGO TOKEN</label>
-                <select
+                <CargoSelect
+                  ariaLabel="Cargo token"
                   value={depositTokenAddress}
-                  onChange={(e) => setDepositTokenAddress(e.target.value)}
-                  className="sup-select"
-                >
-                  {SUPPORTED_TOKENS.map((t) => (
-                    <option key={t.address} value={t.address}>
-                      {t.symbol} — {t.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setDepositTokenAddress}
+                  options={SUPPORTED_TOKENS.map((token) => ({
+                    value: token.address,
+                    symbol: token.symbol,
+                    name: token.name,
+                  }))}
+                />
               </div>
 
               <div className="sup-form-group">
@@ -222,7 +217,7 @@ export const OwnerHold: React.FC<OwnerHoldProps> = ({ hold, onDeposit, onWithdra
             </div>
             <form onSubmit={handleWithdrawSubmit} className="sup-modal-form">
               <p className="modal-description">
-                Calm withdrawal directly to the Captain’s verified custody address (<code>{OWNER_ADDRESS.slice(0, 8)}…{OWNER_ADDRESS.slice(-6)}</code>).
+                Calm withdrawal directly to the connected owner (<code>{ownerAddress.slice(0, 8)}…{ownerAddress.slice(-6)}</code>).
               </p>
 
               <div className="sup-form-group">

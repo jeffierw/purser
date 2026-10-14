@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
 import { SUPPORTED_TOKENS } from '../mockContractState';
 import type { Budget, Token } from '../types';
+import { grantKey } from '../contracts/venues';
+import { CargoSelect } from './CargoSelect';
 import { WaxSeal } from './WaxSeal';
 
 interface OperatorSettleProps {
   warrants: Record<string, Budget>;
   currentEpoch: number;
   onSettle: (params: {
+    warrant: Budget;
     tokenIn: Token;
     tokenOut: Token;
     amountIn: string;
     minAmountOut: string;
-    actualAmountOut: string;
-  }) => { success: boolean; ruleError?: string };
+  }) => Promise<{ success: boolean; ruleError?: string }>;
 }
 
 export const OperatorSettle: React.FC<OperatorSettleProps> = ({
@@ -23,12 +25,16 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
   const liveWarrants = Object.values(warrants).filter((w) => {
     if (w.epoch !== currentEpoch || !w.active) return false;
     if (w.validUntil && Date.now() > w.validUntil) return false;
+    if (!w.actionId || !w.protocol) return false;
     if (parseFloat(w.remaining) <= 0) return false;
     return true;
   });
 
   const hasLiveWarrant = liveWarrants.length > 0;
-  const activeWarrant = liveWarrants[0];
+  const [selectedKey, setSelectedKey] = useState<string>('');
+  const activeWarrant =
+    liveWarrants.find((warrant) => grantKey(warrant.actionId, warrant.tokenAddress) === selectedKey) ??
+    liveWarrants[0];
 
   const inToken = activeWarrant
     ? SUPPORTED_TOKENS.find((t) => t.address.toLowerCase() === activeWarrant.tokenAddress.toLowerCase())
@@ -37,31 +43,28 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
   const [selectedOutAddress, setSelectedOutAddress] = useState<string>('');
   const [spendAmount, setSpendAmount] = useState<string>('');
   const [minReceiveAmount, setMinReceiveAmount] = useState<string>('');
+  const [pending, setPending] = useState(false);
   const [ruleRefusalReason, setRuleRefusalReason] = useState<string | null>(null);
   const [lastSuccessNotice, setLastSuccessNotice] = useState<string | null>(null);
 
   React.useEffect(() => {
-    if (activeWarrant && activeWarrant.allowedTokensOut.length > 0 && !selectedOutAddress) {
+    if (!activeWarrant) return;
+    const key = grantKey(activeWarrant.actionId, activeWarrant.tokenAddress);
+    if (selectedKey !== key && !liveWarrants.some((warrant) => grantKey(warrant.actionId, warrant.tokenAddress) === selectedKey)) {
+      setSelectedKey(key);
+    }
+    if (activeWarrant.allowedTokensOut.length > 0 && !activeWarrant.allowedTokensOut.some((addr) => addr.toLowerCase() === selectedOutAddress.toLowerCase())) {
       setSelectedOutAddress(activeWarrant.allowedTokensOut[0]);
     }
-  }, [activeWarrant, selectedOutAddress]);
+  }, [activeWarrant, liveWarrants, selectedKey, selectedOutAddress]);
 
   const outToken = SUPPORTED_TOKENS.find(
     (t) => t.address.toLowerCase() === selectedOutAddress.toLowerCase()
   );
 
-  const getSimulatedOutAmount = (amountInNum: number, inSym?: string, outSym?: string): number => {
-    if (inSym === 'USDC' && outSym === 'MON') return amountInNum * 0.125;
-    if (inSym === 'USDC' && outSym === 'CHOG') return amountInNum * 17;
-    if (inSym === 'MON' && outSym === 'USDC') return amountInNum * 8;
-    return amountInNum * 1.5;
-  };
-
-  // Pipeline stages evaluation (Sup Wallet Step 04 rail pattern)
   const spendNum = parseFloat(spendAmount) || 0;
   const capNum = activeWarrant ? parseFloat(activeWarrant.perTxCap) : 0;
   const remNum = activeWarrant ? parseFloat(activeWarrant.remaining) : 0;
-
   const isUnderCap = spendNum > 0 && spendNum <= capNum;
   const isUnderRem = spendNum > 0 && spendNum <= remNum;
   const isPairAllowed =
@@ -69,7 +72,7 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
     !!outToken &&
     activeWarrant.allowedTokensOut.some((a) => a.toLowerCase() === outToken.address.toLowerCase());
 
-  const handleSettleSubmit = (e: React.FormEvent) => {
+  const handleSettleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setRuleRefusalReason(null);
     setLastSuccessNotice(null);
@@ -84,6 +87,11 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
 
     if (isNaN(amountInNum) || amountInNum <= 0) {
       setRuleRefusalReason('Settlement sum must be greater than zero.');
+      return;
+    }
+
+    if (isNaN(minOutNum) || minOutNum <= 0) {
+      setRuleRefusalReason('Name the minimum amount that must come back. A blank minimum is refused.');
       return;
     }
 
@@ -108,27 +116,18 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
       return;
     }
 
-    const calculatedOut = getSimulatedOutAmount(amountInNum, inToken.symbol, outToken.symbol);
-
-    if (!isNaN(minOutNum) && calculatedOut < minOutNum) {
-      setRuleRefusalReason(
-        `Slippage Refusal: Execution yield (${calculatedOut.toFixed(2)} ${outToken.symbol}) fell below minimum required receipt of ${minReceiveAmount} ${outToken.symbol}.`
-      );
-      return;
-    }
-
-    const result = onSettle({
+    setPending(true);
+    const result = await onSettle({
+      warrant: activeWarrant,
       tokenIn: inToken,
       tokenOut: outToken,
       amountIn: spendAmount,
-      minAmountOut: minReceiveAmount || '0',
-      actualAmountOut: calculatedOut.toFixed(2),
+      minAmountOut: minReceiveAmount,
     });
+    setPending(false);
 
     if (result.success) {
-      setLastSuccessNotice(
-        `${spendAmount} ${inToken.symbol} became ${calculatedOut.toFixed(2)} ${outToken.symbol}. Came aboard.`
-      );
+      setLastSuccessNotice(`${spendAmount} ${inToken.symbol} settled on ${activeWarrant.protocol}. Output stayed aboard.`);
       setSpendAmount('');
       setMinReceiveAmount('');
     } else if (result.ruleError) {
@@ -144,14 +143,14 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
         </div>
         <div className="sup-titlecell">
           <div className="sup-title-meta">
-            <span className="sup-kicker">OPERATOR EXECUTION</span>
+            <span className="sup-kicker">AGENT</span>
             <span className="sup-pill-status">
-              <i>●</i> Settle Inside Bounds
+              <i>●</i> Inside the grant
             </span>
           </div>
-          <h2 className="sup-h2">Execution Engine</h2>
+          <h2 className="sup-h2">Settle</h2>
           <p className="sup-section-lede">
-            The purser settles inside the posted warrant. Proceeds return automatically to ship custody. Zero withdrawal capability.
+            The agent swaps only what the grant names. Output returns to the strongbox. This key cannot withdraw.
           </p>
         </div>
       </div>
@@ -160,9 +159,9 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
         <div className="sup-empty-card">
           <div className="sup-empty-inner">
             <span className="empty-ico">🔒</span>
-            <h3 className="empty-title">No live warrant in force aboard</h3>
+            <h3 className="empty-title">No grant in force</h3>
             <p className="empty-text">
-              The seal has been broken or no spending allowance is posted by the Captain. The operator cannot settle any trade.
+              There is no live allowance for this agent. A swap outside a grant cannot be expressed.
             </p>
           </div>
         </div>
@@ -230,7 +229,7 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
               </div>
 
               <h3 className="read-warrant-heading">
-                Commission for {inToken?.symbol}
+                {activeWarrant.protocol} · {inToken?.symbol}
               </h3>
 
               <div className="read-warrant-stats">
@@ -276,11 +275,8 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
                 <span className="block-label">VENUES:</span>
                 <div className="venue-line live-venue">
                   <span className="venue-dot">●</span>
-                  <span className="venue-name">Swap</span>
-                  <span className="venue-status">Kuru Flow Router</span>
-                </div>
-                <div className="venue-line blank-venue">
-                  <span className="blank-rule" />
+                  <span className="venue-name">{activeWarrant.action}</span>
+                  <span className="venue-status">{activeWarrant.protocol}</span>
                 </div>
               </div>
             </div>
@@ -294,23 +290,45 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
 
               <form onSubmit={handleSettleSubmit} className="execute-form">
                 <div className="sup-form-group">
-                  <label className="sup-form-label">CONVERSION PAIR</label>
-                  <select
-                    value={selectedOutAddress}
-                    onChange={(e) => setSelectedOutAddress(e.target.value)}
-                    className="sup-select"
-                  >
-                    {activeWarrant.allowedTokensOut.map((outAddr) => {
-                      const out = SUPPORTED_TOKENS.find(
-                        (t) => t.address.toLowerCase() === outAddr.toLowerCase()
+                  <label className="sup-form-label">GRANT</label>
+                  <CargoSelect
+                    ariaLabel="Grant"
+                    value={grantKey(activeWarrant.actionId, activeWarrant.tokenAddress)}
+                    onChange={(key) => {
+                      setSelectedKey(key);
+                      setSelectedOutAddress('');
+                      setRuleRefusalReason(null);
+                    }}
+                    options={liveWarrants.map((warrant) => {
+                      const token = SUPPORTED_TOKENS.find(
+                        (item) => item.address.toLowerCase() === warrant.tokenAddress.toLowerCase(),
                       );
-                      return (
-                        <option key={outAddr} value={outAddr}>
-                          {inToken?.symbol} → {out?.symbol} ({out?.name})
-                        </option>
-                      );
+                      return {
+                        value: grantKey(warrant.actionId, warrant.tokenAddress),
+                        symbol: `${warrant.protocol} · ${token?.symbol ?? 'Asset'}`,
+                        name: warrant.action,
+                      };
                     })}
-                  </select>
+                  />
+                </div>
+
+                <div className="sup-form-group">
+                  <label className="sup-form-label">CONVERSION PAIR</label>
+                  <CargoSelect
+                    ariaLabel="Conversion pair"
+                    value={selectedOutAddress}
+                    onChange={setSelectedOutAddress}
+                    options={activeWarrant.allowedTokensOut.map((outAddr) => {
+                      const out = SUPPORTED_TOKENS.find(
+                        (token) => token.address.toLowerCase() === outAddr.toLowerCase()
+                      );
+                      return {
+                        value: outAddr,
+                        symbol: `${inToken?.symbol ?? 'Token'} → ${out?.symbol ?? 'Token'}`,
+                        name: out?.name ?? 'Unknown cargo',
+                      };
+                    })}
+                  />
                 </div>
 
                 <div className="sup-form-group">
@@ -375,8 +393,8 @@ export const OperatorSettle: React.FC<OperatorSettleProps> = ({
                 )}
 
                 <div className="execute-form-actions">
-                  <button type="submit" className="sup-btn-highlight full-width">
-                    Settle Under Warrant <span>→</span>
+                  <button type="submit" className="sup-btn-highlight full-width" disabled={pending}>
+                    {pending ? 'Sending…' : 'Settle Under Warrant'} <span>→</span>
                   </button>
                 </div>
               </form>

@@ -1,3 +1,7 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 /* =========================================================================
    PURSER — Sup Wallet Inspired Design System & Complete Route Experience
    Pages: Landing Page (/) -> Login Page (/login?next=/app) -> App Dashboard (/app)
@@ -49,11 +53,13 @@
   --bento-shadow: 0 4px 24px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-/* Base Reset */
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+/* Base reset lives under Tailwind utilities so dropdown padding can apply. */
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 html, body {
@@ -420,6 +426,53 @@ html, body {
   color: var(--brass-glow);
 }
 
+.lg-connect-error,
+.lg-note {
+  margin-top: 4px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.lg-connect-error {
+  color: var(--wax-primary);
+  background: rgba(166, 61, 48, 0.08);
+  border: 1px solid var(--wax-border, rgba(166, 61, 48, 0.35));
+}
+
+.lg-note {
+  color: var(--text-sub);
+  background: var(--brass-tint);
+  border: 1px solid var(--brass-border);
+}
+
+.lg-key-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--brass-border);
+  background: var(--brass-tint);
+}
+
+.lg-key-kicker {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--brass-glow);
+}
+
+.lg-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-sub);
+}
+
 .landing-footer {
   margin-top: auto;
   border-top: 1px solid var(--border-subtle);
@@ -588,7 +641,7 @@ html, body {
 .v5 .lg-lead {
   display: flex;
   flex-direction: column;
-  margin-bottom: 28px;
+  margin-bottom: 16px;
 }
 
 .v5 .lg-eyebrow {
@@ -650,7 +703,10 @@ html, body {
 }
 
 .lg-btn-icon {
-  font-size: 20px;
+  font-family: var(--font-heavy);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   width: 32px;
   height: 32px;
   display: flex;
@@ -660,6 +716,12 @@ html, body {
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   flex-shrink: 0;
+}
+
+.lg-btn-icon--emoji {
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 400;
 }
 
 .lg-btn-text {
@@ -964,6 +1026,26 @@ html, body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.sup-privy-tools {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sup-privy-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
 }
 
 .sup-address-badge {
